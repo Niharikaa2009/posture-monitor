@@ -2,6 +2,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import time
+import winsound
 
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose()
@@ -14,24 +15,26 @@ def angle(p1, p2, p3):
     bc = c - b
     cosang = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
     cosang = np.clip(cosang, -1, 1)
-    return np.degrees(np.arccos(cosang))
+    cosang = np.arccos(cosang)
+    return np.degrees(cosang)
 
-cap = cv2.VideoCapture(0)
+cam = cv2.VideoCapture(0)
 
-# Smoothing
+# Smoothing/Exponential Moving Average(EMA)
 smooth_head = None
 smooth_shoulder = None
 alpha = 0.2
 
 # Bad posture alert
-bad_start = None
-ALERT_TIME = 15  # seconds
+badpos = None
+ALERT_TIME = 10
+alert_played = False
 
 # Flexible thresholds
-HEAD_IDEAL = 168
+HEAD_IDEAL = 169
 HEAD_RANGE = 7
-SHOULDER_IDEAL = 83
-SHOULDER_RANGE = 6
+SHOULDER_IDEAL = 80
+SHOULDER_RANGE = 5
 
 # Session tracking
 session_start = time.time()
@@ -39,8 +42,14 @@ good_time = 0
 bad_time = 0
 prev_time = time.time()
 
+# Posture stability
+good_frames = 0
+bad_frames = 0
+FRAME_THRESHOLD = 10
+current_status = "GOOD POSTURE"
+
 while True:
-    ret, frame = cap.read()
+    ret, frame = cam.read()
     if not ret:
         continue
 
@@ -89,16 +98,32 @@ while True:
         delta = current_time - prev_time
         prev_time = current_time
 
+        # Stability logic
         if head_good and shoulder_good:
-            status = "GOOD POSTURE"
-            color = (0, 255, 0)
+            good_frames += 1
+            bad_frames = 0
+        else:
+            bad_frames += 1
+            good_frames = 0
+
+        if good_frames > FRAME_THRESHOLD:
+            current_status = "GOOD POSTURE"
             bad_start = None
+            alert_played = False
+
+        if bad_frames > FRAME_THRESHOLD:
+            current_status = "BAD POSTURE"
+
+        status = current_status
+        color = (0,255,0) if status == "GOOD POSTURE" else (0,0,255)
+
+        if status == "GOOD POSTURE":
             good_time += delta
         else:
-            status = "BAD POSTURE"
-            color = (0, 0, 255)
             bad_time += delta
 
+        # Bad posture timer
+        if status == "BAD POSTURE":
             if bad_start is None:
                 bad_start = time.time()
 
@@ -110,6 +135,10 @@ while True:
             if elapsed > ALERT_TIME:
                 cv2.putText(frame, "ALERT: Sit up straight!", (30, 220),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 3)
+
+                if not alert_played:
+                    winsound.Beep(1000, 500)
+                    alert_played = True
 
         # Posture score
         head_score = max(0, 100 - abs(smooth_head - HEAD_IDEAL) * 4)
@@ -156,7 +185,7 @@ while True:
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-cap.release()
+cam.release()
 cv2.destroyAllWindows()
 
 # Final session report
@@ -170,5 +199,3 @@ print(f"Bad posture time: {bad_time:.1f} seconds")
 if session_total > 0:
     good_percent = (good_time / session_total) * 100
     print(f"Good posture percentage: {good_percent:.1f}%")
-
-print("-----------------------------------")
